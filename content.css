@@ -368,3 +368,21 @@
 .highlight-share-card[data-style="2"] .selected-text hr {
   border-top-color: #444;
 }
+
+/* ===== 站点模板渲染模式 ===== */
+
+/* 模板接管内容区视觉：去掉默认内容区间距，交由模板自身样式控制 */
+.highlight-share-card[data-renderer="template"] .card-content {
+  margin: 0;
+}
+
+/* 模板模式下隐藏默认标题栏（favicon + 标题 + URL），呈现站点模板的完整卡片样式 */
+.highlight-share-card[data-renderer="template"] .card-header {
+  display: none;
+}
+
+/* 站点模板切换按钮激活状态（与二维码按钮一致） */
+.template-toggle.active {
+  background: #005299 !important;
+  color: #fff !important;
+}

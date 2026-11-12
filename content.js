@@ -22,8 +22,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 function createShareCard(data) {
   if (cardModal) {
-    document.body.removeChild(cardModal);
+    closeModal();
   }
+
+  // 打包选区快照：数据捕获与渲染解耦，默认渲染与站点模板共用同一份数据
+  const snapshot = buildSnapshot(data);
+  const template = (window.HighlightShareTemplates || { findForHost: () => null })
+    .findForHost(window.location.hostname);
 
   // 创建模态框
   cardModal = document.createElement('div');
@@ -34,45 +39,24 @@ function createShareCard(data) {
   card.className = 'highlight-share-card';
   card.setAttribute('data-style', '1');
 
-  // 获取页面信息
-  const pageTitle = document.title;
-  const pageUrl = window.location.href;
-  const favicon = document.querySelector('link[rel*="icon"]')?.href || '/favicon.ico';
-
-  // 处理选中的文本，保留段落格式（纯文本兜底路径）
-  const formattedText = data.selection ? formatSelectedText(data.selection) : '';
-
-  // 构建卡片内容（选中内容稍后以 DOM 方式插入，避免字符串拼接破坏富文本结构）
+  // 构建卡片外壳（选中内容由 renderCardContent 以 DOM 方式插入，避免字符串拼接破坏富文本结构）
   card.innerHTML = `
     <div class="card-header">
-      <img src="${favicon}" class="favicon" alt="favicon" crossorigin="anonymous">
+      <img src="${snapshot.favicon}" class="favicon" alt="favicon" crossorigin="anonymous">
       <div class="page-info">
-        <div class="page-title">${pageTitle}</div>
-        <div class="page-url">${pageUrl}</div>
+        <div class="page-title">${snapshot.pageTitle}</div>
+        <div class="page-url">${snapshot.pageUrl}</div>
       </div>
     </div>
-    <div class="card-content">
-      ${data.imageUrl ? `<img src="${data.imageUrl}" class="selected-image" alt="selected image" crossorigin="anonymous">` : ''}
-    </div>
+    <div class="card-content"></div>
     <div class="card-footer">
       <div class="qrcode-container" style="display: none;"></div>
     </div>
   `;
 
-  // 插入选中内容：优先富文本片段（保留浏览器中的结构与缩进），失败时回退纯文本
-  const cardContent = card.querySelector('.card-content');
-  const selectionFragment = captureSelectionFragment();
-  if (selectionFragment) {
-    const textDiv = document.createElement('div');
-    textDiv.className = 'selected-text';
-    textDiv.appendChild(selectionFragment);
-    cardContent.insertBefore(textDiv, cardContent.firstChild);
-  } else if (formattedText) {
-    const textDiv = document.createElement('div');
-    textDiv.className = 'selected-text';
-    textDiv.innerHTML = formattedText;
-    cardContent.insertBefore(textDiv, cardContent.firstChild);
-  }
+  // 渲染内容区：命中站点模板时默认用模板渲染，可通过工具栏"模板"按钮切回默认样式
+  const cardState = { snapshot, template, useTemplate: !!template };
+  renderCardContent(card, cardState);
 
   // 创建工具栏
   const toolbar = document.createElement('div');
@@ -119,6 +103,25 @@ function createShareCard(data) {
     </button>
   `;
 
+  // 站点模板切换按钮：仅当前网站命中模板时显示（默认已激活模板渲染）
+  let templateToggle = null;
+  if (template) {
+    templateToggle = document.createElement('button');
+    templateToggle.className = 'template-toggle';
+    if (cardState.useTemplate) {
+      templateToggle.classList.add('active');
+    }
+    templateToggle.title = template.name || '站点模板';
+    templateToggle.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+      </svg>
+      模板
+    `;
+    toolbar.insertBefore(templateToggle, toolbar.firstChild);
+  }
+
   // 将卡片和工具栏添加到模态框
   cardModal.appendChild(card);
   cardModal.appendChild(toolbar);
@@ -146,6 +149,15 @@ function createShareCard(data) {
 
   if (styleSwitch) {
     styleSwitch.addEventListener('click', () => switchStyle(card));
+  }
+
+  if (templateToggle) {
+    templateToggle.addEventListener('click', () => {
+      cardState.useTemplate = !cardState.useTemplate;
+      templateToggle.classList.toggle('active', cardState.useTemplate);
+      renderCardContent(card, cardState);
+      waitForImagesAndResize(card);
+    });
   }
 
   if (qrcodeToggle && qrcodeContainer) {
@@ -217,10 +229,17 @@ function createShareCard(data) {
     document.addEventListener('click', removeMenu);
   });
 
-  // 预加载图片
+  // 预加载图片，加载完成后应用预览高度限制
+  waitForImagesAndResize(card);
+}
+
+// 等待卡片内图片加载完成后应用预览高度限制（切换渲染模式后需重新执行）
+function waitForImagesAndResize(card) {
+  card.style.maxHeight = '';
+  card.style.overflow = '';
   const images = card.querySelectorAll('img');
   Promise.all(Array.from(images).map(img => {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       if (img.complete) {
         resolve();
       } else {
@@ -233,6 +252,89 @@ function createShareCard(data) {
     card.style.maxHeight = '80vh';
     card.style.overflow = 'auto';
   });
+}
+
+// ============ 选区快照与内容区渲染（默认渲染 / 站点模板渲染共用） ============
+
+// 打包选区快照：页面信息 + 选区富文本/纯文本 + 右键图片，供默认渲染与站点模板共用
+function buildSnapshot(data) {
+  // 选区锚点：选区公共祖先节点，站点模板可借它定位选区所在的页面结构（如推文卡片）
+  const range = getActiveRange();
+  const anchorNode = range
+    ? (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement)
+    : null;
+
+  return {
+    pageTitle: document.title,
+    pageUrl: window.location.href,
+    host: window.location.hostname,
+    favicon: document.querySelector('link[rel*="icon"]')?.href || '/favicon.ico',
+    anchor: anchorNode,
+    richFragment: captureSelectionFragment(),
+    plainHtml: data.selection ? formatSelectedText(data.selection) : '',
+    text: data.selection || '',
+    imageUrl: data.imageUrl || ''
+  };
+}
+
+// 按当前渲染模式填充卡片内容区
+function renderCardContent(card, cardState) {
+  const cardContent = card.querySelector('.card-content');
+  cardContent.innerHTML = '';
+
+  if (cardState.useTemplate && cardState.template) {
+    card.setAttribute('data-renderer', 'template');
+    renderTemplateContent(card, cardContent, cardState);
+  } else {
+    card.removeAttribute('data-renderer');
+    renderDefaultContent(cardContent, cardState.snapshot);
+  }
+}
+
+// 默认渲染：富文本片段优先，纯文本兜底，右键图片追加在后
+function renderDefaultContent(cardContent, snapshot) {
+  if (snapshot.richFragment) {
+    const textDiv = document.createElement('div');
+    textDiv.className = 'selected-text';
+    textDiv.appendChild(snapshot.richFragment.cloneNode(true));
+    cardContent.appendChild(textDiv);
+  } else if (snapshot.plainHtml) {
+    const textDiv = document.createElement('div');
+    textDiv.className = 'selected-text';
+    textDiv.innerHTML = snapshot.plainHtml;
+    cardContent.appendChild(textDiv);
+  }
+
+  if (snapshot.imageUrl) {
+    const img = document.createElement('img');
+    img.src = snapshot.imageUrl;
+    img.className = 'selected-image';
+    img.alt = 'selected image';
+    img.crossOrigin = 'anonymous';
+    cardContent.appendChild(img);
+  }
+}
+
+// 站点模板渲染：模板样式随内容区插入，渲染异常时回退默认渲染
+function renderTemplateContent(card, cardContent, cardState) {
+  const { snapshot, template } = cardState;
+  try {
+    if (template.css) {
+      const style = document.createElement('style');
+      style.textContent = template.css;
+      cardContent.appendChild(style);
+    }
+    const node = template.render(snapshot);
+    if (node) {
+      cardContent.appendChild(node);
+    }
+  } catch (error) {
+    console.warn('HighlightShare: 站点模板渲染失败，回退默认渲染', error);
+    card.removeAttribute('data-renderer');
+    renderDefaultContent(cardContent, snapshot);
+  }
 }
 
 // 标题限一行：标题超出一行宽度时逐字截短并补省略号。

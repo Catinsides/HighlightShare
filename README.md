@@ -21,6 +21,7 @@
 
 - 🎯 **一键选择** — 选中网页文字或右键点击图片即可生成卡片
 - 🎨 **双主题切换** — 提供明 / 暗两种精美主题风格
+- 🧩 **站点模板** — 针对特定网站的专属卡片样式，内置可扩展的模板机制
 - 📱 **二维码分享** — 自动生成当前页面二维码，支持显示/隐藏
 - 💾 **便捷导出** — 一键复制到剪贴板或下载为 PNG 图片
 - 🎭 **优雅界面** — 简洁美观的卡片设计，信息层次清晰
@@ -52,6 +53,7 @@
    - 点击右键菜单中的 **「生成分享卡片」**
 3. **自定义卡片**
    - 点击 **「切换」** 按钮更换明/暗主题风格
+   - 在支持站点模板的网站上，点击 **「模板」** 按钮使用该网站的专属卡片样式（可随时切回）
    - 点击 **「二维码」** 按钮显示或隐藏页面二维码
 4. **分享卡片**
    - 点击 **「复制」** 按钮复制到剪贴板
@@ -65,6 +67,10 @@ HighlightShare/
 ├── background.js          # Service Worker 后台脚本
 ├── content.js             # 内容脚本（卡片生成核心逻辑）
 ├── content.css            # 卡片样式
+├── templates/             # 站点模板
+│   ├── registry.js        # 模板注册表
+│   └── x/                 # X（Twitter）站点模板
+│       └── template.js
 ├── html2canvas.min.js     # html2canvas 库
 ├── qrcode.min.js          # QRCode.js 库
 └── icons/                 # 扩展图标
@@ -72,6 +78,50 @@ HighlightShare/
     ├── icon48.png
     └── icon128.png
 ```
+
+## 🧩 网站模板
+
+针对特定网站定制的卡片渲染模板。当你在匹配的网站上生成卡片时，工具栏会出现 **「模板」** 按钮，一键切换为该网站的专属卡片样式（可随时切回默认渲染）。
+
+已内置：X / Twitter（`templates/x/`）— 在推文上选中任意内容即可生成完整推文卡片，自动提取作者名、头像、发布时间、媒体图与互动统计（replies / shares / likes），提取不到的区块自动省略。
+
+### 编写新模板
+
+1. 新建 `templates/<站点>/template.js`：
+
+   ```js
+   (function () {
+     window.HighlightShareTemplates.register({
+       id: 'my-site',               // 唯一 id
+       name: '我的站点模板',         // 工具栏按钮提示名称
+       matches: ['example.com'],    // 匹配的域名（自动包含子域）
+       css: `.my-card { /* 模板样式 */ }`,
+       render(data) {               // data 为选区快照，返回 DOM 节点
+         const root = document.createElement('div');
+         // ...使用 data 渲染卡片内容
+         return root;
+       }
+     });
+   })();
+   ```
+
+2. 在 `manifest.json` 的 `content_scripts.js` 数组中追加该文件路径（须位于 `content.js` 与 `templates/registry.js` 之后）。
+
+**渲染数据（选区快照）字段**：
+
+| 字段 | 说明 |
+|------|------|
+| `pageTitle` / `pageUrl` / `host` / `favicon` | 当前页面信息 |
+| `richFragment` | 富文本片段（DocumentFragment，使用时请 `cloneNode(true)`），可能为 null |
+| `plainHtml` / `text` | 纯文本兜底（HTML / 原始文本） |
+| `imageUrl` | 右键图片地址，可能为空 |
+
+**注意事项**：
+
+- 模板只负责卡片中间的内容区；顶部标题栏、二维码与复制/下载等通用能力由扩展提供
+- 导出图片使用 html2canvas 渲染，请避免使用它不支持的 CSS 特性（如部分 filter、conic-gradient）
+- 模板内引用图片请设置 `crossorigin="anonymous"`，否则导出会因画布污染失败
+- 模板渲染抛出异常时会自动回退默认渲染，不会中断卡片生成
 
 ## 🛠️ 技术栈
 

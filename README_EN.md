@@ -21,6 +21,7 @@ English | [中文](./README.md)
 
 - 🎯 **One-Click Selection** — Select text or right-click images on any webpage
 - 🎨 **Dual Themes** — Light and dark theme styles with one-click switching
+- 🧩 **Site Templates** — Dedicated card styles for specific websites, powered by an extensible template mechanism
 - 📱 **QR Code Sharing** — Auto-generate QR code for the current page, toggle visibility
 - 💾 **Easy Export** — Copy to clipboard or download as PNG image
 - 🎭 **Elegant UI** — Clean and beautiful card design with clear information hierarchy
@@ -52,6 +53,7 @@ English | [中文](./README.md)
    - Click **"生成分享卡片"** in the context menu
 3. **Customize Card**
    - Click **"切换"** button to switch between light/dark themes
+   - On websites with site templates, click **"模板"** to use the dedicated card style for that site (switch back anytime)
    - Click **"二维码"** button to show/hide the QR code
 4. **Share Card**
    - Click **"复制"** button to copy to clipboard
@@ -65,6 +67,10 @@ HighlightShare/
 ├── background.js          # Service worker background script
 ├── content.js             # Content script (core card generation logic)
 ├── content.css            # Card styles
+├── templates/             # Site templates
+│   ├── registry.js        # Template registry
+│   └── x/                 # X (Twitter) site template
+│       └── template.js
 ├── html2canvas.min.js     # html2canvas library
 ├── qrcode.min.js          # QRCode.js library
 └── icons/                 # Extension icons
@@ -72,6 +78,50 @@ HighlightShare/
     ├── icon48.png
     └── icon128.png
 ```
+
+## 🧩 Site Templates
+
+Customized card rendering templates for specific websites. When you generate a card on a matching website, a **"模板"** (Template) button appears in the toolbar, letting you switch to the site's dedicated card style (and back to the default rendering anytime).
+
+Built-in: X / Twitter (`templates/x/`) — select any part of a tweet to generate a full tweet card. It automatically extracts the author name, avatar, publish time, media images and engagement stats (replies / shares / likes); blocks whose data cannot be found are omitted.
+
+### Writing a New Template
+
+1. Create `templates/<site>/template.js`:
+
+   ```js
+   (function () {
+     window.HighlightShareTemplates.register({
+       id: 'my-site',               // Unique id
+       name: 'My Site Template',    // Toolbar button tooltip
+       matches: ['example.com'],    // Matching domains (subdomains included automatically)
+       css: `.my-card { /* template styles */ }`,
+       render(data) {               // data is the selection snapshot; return a DOM node
+         const root = document.createElement('div');
+         // ...build the card content from data
+         return root;
+       }
+     });
+   })();
+   ```
+
+2. Append the file path to the `content_scripts.js` array in `manifest.json` (it must come after `content.js` and `templates/registry.js`).
+
+**Selection snapshot fields passed to `render`**:
+
+| Field | Description |
+|-------|-------------|
+| `pageTitle` / `pageUrl` / `host` / `favicon` | Current page info |
+| `richFragment` | Rich-text fragment (DocumentFragment, use `cloneNode(true)` when inserting), may be null |
+| `plainHtml` / `text` | Plain-text fallback (HTML / raw text) |
+| `imageUrl` | Right-clicked image URL, may be empty |
+
+**Notes**:
+
+- Templates only render the card's content area; the header, QR code, copy/download and other shared capabilities are provided by the extension
+- Exported images are rendered by html2canvas; avoid CSS features it does not support (e.g. some filters, conic-gradient)
+- Set `crossorigin="anonymous"` on images inside templates, otherwise export fails due to canvas tainting
+- If a template's render throws, the extension automatically falls back to the default rendering
 
 ## 🛠️ Tech Stack
 
