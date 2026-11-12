@@ -272,6 +272,7 @@ function buildSnapshot(data) {
     host: window.location.hostname,
     favicon: document.querySelector('link[rel*="icon"]')?.href || '/favicon.ico',
     anchor: anchorNode,
+    selectionRange: range,
     richFragment: captureSelectionFragment(),
     plainHtml: data.selection ? formatSelectedText(data.selection) : '',
     text: data.selection || '',

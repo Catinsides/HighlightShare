@@ -74,25 +74,29 @@
       object-fit: cover;
       flex: none;
     }
-    .hs-tpl-v2ex-votes {
+    .hs-tpl-v2ex-reply-author {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 10px;
+      margin: 0 0 12px;
+    }
+    .hs-tpl-v2ex-reply-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 6px;
+      object-fit: cover;
       flex: none;
     }
-    .hs-tpl-v2ex-vote {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 22px;
-      height: 22px;
-      border: 1px solid #e2e2e2;
-      border-radius: 5px;
-      color: #999;
+    .hs-tpl-v2ex-reply-name {
+      font-weight: 700;
+      color: #555;
+      font-size: 14px;
+      line-height: 1.5;
     }
-    .hs-tpl-v2ex-vote svg {
-      width: 12px;
-      height: 12px;
+    .hs-tpl-v2ex-reply-meta {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #999;
     }
     .hs-tpl-v2ex-byline {
       font-size: 13px;
@@ -158,6 +162,26 @@
     .hs-tpl-v2ex-text img {
       max-width: 100%;
     }
+
+    /* 选中内容突出 + 上下文淡化：行级结构，淡化一律用 opacity（html2canvas 兼容） */
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line {
+      margin: 0 0 6px;
+    }
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line p,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line ul,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line ol,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line blockquote,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line pre,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line li {
+      margin: 0 0 6px;
+    }
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line p:last-child,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line ul:last-child,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line ol:last-child,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line blockquote:last-child,
+    .hs-tpl-v2ex-dimmer .hs-tpl-v2ex-line pre:last-child {
+      margin-bottom: 0;
+    }
     .hs-tpl-v2ex-footer {
       margin-top: 16px;
       font-size: 13px;
@@ -184,8 +208,10 @@
     .highlight-share-card[data-style="2"] .hs-tpl-v2ex-divider {
       background: #3a3a3a;
     }
-    .highlight-share-card[data-style="2"] .hs-tpl-v2ex-vote {
-      border-color: #4a4a4a;
+    .highlight-share-card[data-style="2"] .hs-tpl-v2ex-reply-name {
+      color: #c6cbd1;
+    }
+    .highlight-share-card[data-style="2"] .hs-tpl-v2ex-reply-meta {
       color: #8b98a5;
     }
     .highlight-share-card[data-style="2"] .hs-tpl-v2ex-text {
@@ -329,19 +355,292 @@
     return node;
   }
 
-  // 投票箭头（↑/↓，对照 V2EX 的 fa-chevron-up / fa-chevron-down）
-  function createVoteIcon(direction) {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
-    const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    polyline.setAttribute('points', direction === 'up' ? '18 15 12 9 6 15' : '6 9 12 15 18 9');
-    svg.appendChild(polyline);
-    return svg;
+  // ============ 选中内容突出 + 上下文淡化 ============
+  // 参考 x.log 经验：淡化一律用 opacity（html2canvas 兼容）；行拆分按真实 DOM 结构，
+  // V2EX 纯文本帖是"文本节点 + <br>"分隔，markdown 帖是块级元素，两种都要支持。
+
+  // 淡化档位：离选中内容越远越淡（对照微信选中分享样式）
+  const DIM_OPACITY = [0.5, 0.32, 0.18, 0.08];
+
+  // 获取选区 Range：快照携带优先（content.js 打包），实时选区兜底
+  function getDimRange(data) {
+    if (data.selectionRange && data.selectionRange.startContainer && !data.selectionRange.collapsed) {
+      return data.selectionRange;
+    }
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        return sel.getRangeAt(0);
+      }
+    } catch (e) {
+      // 忽略异常
+    }
+    return null;
+  }
+
+  // 正文容器：选区所在 reply_content / markdown_body / topic_content，兜底主题容器。
+  // reply_content 在最前：选区在回帖里时优先用回帖内容做淡化，头部信息仍取自主帖
+  function findBodyContainer(anchor, box) {
+    if (anchor && anchor.closest) {
+      const c = anchor.closest('.reply_content') || anchor.closest('.markdown_body') || anchor.closest('.topic_content');
+      if (c) return c;
+    }
+    if (box) {
+      return box.querySelector('.markdown_body') || box.querySelector('.topic_content');
+    }
+    return null;
+  }
+
+  // 把正文容器拆成行数组。两种结构：
+  // A. 纯文本帖：直接子节点 = 文本节点 + <br>，<br> 是行分隔符
+  // B. markdown 帖：直接子元素 = 块级元素（p/ul/...），一行一块
+  function splitLines(container) {
+    const lines = [];
+    const direct = Array.from(container.childNodes);
+    const hasBr = direct.some((n) => n.nodeName === 'BR');
+    const hasText = direct.some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim());
+
+    if (hasBr || (hasText && !direct.some((n) => n.nodeType === Node.ELEMENT_NODE && n.nodeName !== 'BR'))) {
+      // 结构 A：按 <br> 分组成行
+      let group = [];
+      const flush = () => {
+        if (group.length) { lines.push({ kind: 'text', nodes: group }); group = []; }
+      };
+      for (const node of direct) {
+        if (node.nodeName === 'BR') {
+          flush();
+        } else {
+          group.push(node);
+        }
+      }
+      flush();
+    } else {
+      // 结构 B：直接子元素为行，顶层裸文本/行内节点攒成一行
+      let group = [];
+      const flush = () => {
+        if (group.length) { lines.push({ kind: 'block', nodes: group }); group = []; }
+      };
+      for (const node of direct) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          flush();
+          lines.push({ kind: 'block', nodes: [node] });
+        } else {
+          group.push(node);
+        }
+      }
+      flush();
+    }
+    return lines;
+  }
+
+  // 找节点所在的行索引（端点 container 落在哪一行）
+  function lineIndexOfNode(lines, node) {
+    if (!node) return -1;
+    for (let i = 0; i < lines.length; i++) {
+      for (const n of lines[i].nodes) {
+        if (n === node || (n.nodeType === Node.ELEMENT_NODE && n.contains(node))) return i;
+      }
+    }
+    return -1;
+  }
+
+  // 计算每行状态：full（整行选中）/ partial（部分选中）/ none（上下文，淡化）
+  // 算法：选区起点行与终点行之间为选中行；起点/终点落在行中间时该行为 partial
+  function buildDimPlan(lines, range) {
+    const startLine = lineIndexOfNode(lines, range.startContainer);
+    const endLine = lineIndexOfNode(lines, range.endContainer);
+    const plan = lines.map((line) => ({ line, status: 'none', opacity: 1 }));
+    if (startLine < 0 || endLine < 0) return plan; // 端点不在正文行内，全部清晰
+
+    const lo = Math.min(startLine, endLine);
+    const hi = Math.max(startLine, endLine);
+    for (let i = lo; i <= hi; i++) {
+      const line = lines[i];
+      // 单文本节点行的部分选中：端点落在行中间（偏移非 0 且非全长）
+      let partial = false;
+      if (line.kind === 'text' && line.nodes.length === 1 && line.nodes[0].nodeType === Node.TEXT_NODE) {
+        const t = line.nodes[0];
+        const len = t.data.length;
+        if (range.startContainer === t && (range.startOffset > 0 || range.endContainer !== t)) partial = true;
+        if (range.endContainer === t && (range.endOffset < len || range.startContainer !== t)) partial = true;
+      } else {
+        // 块级行：端点落在元素内部视为部分选中
+        const node = line.nodes[0];
+        if (node && node.nodeType === Node.ELEMENT_NODE) {
+          const startIn = node.contains(range.startContainer);
+          const endIn = node.contains(range.endContainer);
+          const wholeStart = startIn && range.startContainer === node && range.startOffset === 0;
+          const wholeEnd = endIn && range.endContainer === node && range.endOffset === node.childNodes.length;
+          if ((startIn && !wholeStart) || (endIn && !wholeEnd)) partial = true;
+        }
+      }
+      // 选中行若端点正好覆盖整行（起点在行首、终点在行尾）应为 full
+      plan[i].status = partial ? 'partial' : 'full';
+    }
+
+    // 上下文淡化：按与选中行的最小距离分配档位
+    for (let i = 0; i < plan.length; i++) {
+      if (plan[i].status !== 'none') continue;
+      let dist = Infinity;
+      for (let j = lo; j <= hi; j++) dist = Math.min(dist, Math.abs(i - j));
+      plan[i].opacity = DIM_OPACITY[Math.min(dist - 1, DIM_OPACITY.length - 1)] || 0.08;
+    }
+    return plan;
+  }
+
+  // 清洗克隆节点：去 id/class/事件属性、链接禁用跳转、图片加 CORS（与选区快照同规则）
+  function sanitizeClone(root) {
+    root.querySelectorAll('script, style, noscript, iframe, object, embed, form, button, input, textarea, select').forEach((el) => el.remove());
+    [root, ...root.querySelectorAll('*')].forEach((el) => {
+      el.removeAttribute('id');
+      el.removeAttribute('class');
+      for (const attr of Array.from(el.attributes)) {
+        if (attr.name.toLowerCase().startsWith('on')) {
+          el.removeAttribute(attr.name);
+        }
+      }
+      if (el.tagName === 'A') {
+        el.removeAttribute('href');
+        el.removeAttribute('target');
+        el.removeAttribute('rel');
+        el.removeAttribute('name');
+      }
+      if (el.tagName === 'IMG') {
+        el.setAttribute('crossorigin', 'anonymous');
+        el.removeAttribute('srcset');
+        el.removeAttribute('sizes');
+        el.removeAttribute('loading');
+      }
+    });
+  }
+
+  // 选区是否落在正文容器内（端点在回复等别处时不启用淡化）
+  function containerContainsRange(container, range) {
+    if (!container || !range) return false;
+    const root = range.commonAncestorContainer;
+    return container === root || container.contains(root);
+  }
+
+  // 整行克隆渲染（上下文行 / 整行选中行共用）
+  function appendClonedLine(lineEl, line) {
+    if (line.kind === 'text') {
+      for (const node of line.nodes) {
+        lineEl.appendChild(node.cloneNode(true));
+      }
+    } else {
+      for (const node of line.nodes) {
+        const clone = node.cloneNode(true);
+        sanitizeClone(clone);
+        lineEl.appendChild(clone);
+      }
+    }
+  }
+
+  // 渲染淡化正文：选中行清晰，上下文行 opacity 递减
+  function renderDimBody(container, range) {
+    const lines = splitLines(container);
+    const plan = buildDimPlan(lines, range);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'hs-tpl-v2ex-dimmer';
+    for (const item of plan) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'hs-tpl-v2ex-line';
+      if (item.status === 'none') {
+        appendClonedLine(lineEl, item.line);
+        lineEl.style.opacity = item.opacity;
+      } else if (item.status === 'full') {
+        appendClonedLine(lineEl, item.line);
+      } else {
+        appendPartialLine(lineEl, item.line, range);
+      }
+      if (lineEl.childNodes.length) wrapper.appendChild(lineEl);
+    }
+    return wrapper;
+  }
+
+  // 部分选中行：拆成"前段淡化 + 选中段清晰 + 后段淡化"
+  function appendPartialLine(lineEl, line, range) {
+    if (line.kind === 'text' && line.nodes.length === 1 && line.nodes[0].nodeType === Node.TEXT_NODE) {
+      // 单文本节点行：按端点偏移直接切三段（V2EX 纯文本帖最常见）
+      const t = line.nodes[0];
+      let s = 0;
+      let e = t.data.length;
+      if (range.startContainer === t) s = range.startOffset;
+      if (range.endContainer === t) e = range.endOffset;
+      const mk = (from, to, opacity) => {
+        if (to <= from) return;
+        const seg = t.cloneNode(false);
+        seg.data = t.data.substring(from, to);
+        const span = document.createElement('span');
+        span.style.opacity = opacity;
+        span.appendChild(seg);
+        lineEl.appendChild(span);
+      };
+      mk(0, s, 0.5);
+      mk(s, e, 1);
+      mk(e, t.data.length, 0.5);
+      return;
+    }
+    // 块级行：用 Range 拆三段，异常回退整行清晰
+    try {
+      const node = line.nodes[0];
+      const r = document.createRange();
+      const before = document.createDocumentFragment();
+      const mid = document.createDocumentFragment();
+      const after = document.createDocumentFragment();
+      const startIn = node.contains(range.startContainer);
+      const endIn = node.contains(range.endContainer);
+      if (startIn) {
+        r.setStart(node, 0);
+        r.setEnd(range.startContainer, range.startOffset);
+        before.appendChild(r.cloneContents());
+        r.setStart(range.startContainer, range.startOffset);
+        r.setEnd(node, node.childNodes.length);
+        mid.appendChild(r.cloneContents());
+      } else if (endIn) {
+        r.setStart(node, 0);
+        r.setEnd(range.endContainer, range.endOffset);
+        mid.appendChild(r.cloneContents());
+        r.setStart(range.endContainer, range.endOffset);
+        r.setEnd(node, node.childNodes.length);
+        after.appendChild(r.cloneContents());
+      }
+      const wrap = (frag, opacity) => {
+        if (!frag.childNodes.length) return;
+        const div = document.createElement('div');
+        div.style.opacity = opacity;
+        div.appendChild(frag);
+        sanitizeClone(div);
+        lineEl.appendChild(div);
+      };
+      wrap(before, 0.5);
+      wrap(mid, 1);
+      wrap(after, 0.5);
+    } catch (e) {
+      lineEl.innerHTML = '';
+      appendClonedLine(lineEl, line);
+    }
+  }
+
+  // 回帖作者信息：选区在回帖楼层时提取头像/用户名/楼层/时间（楼层 cell 结构）
+  function extractReplyInfo(anchor) {
+    if (!anchor || !anchor.closest) return null;
+    const replyContent = anchor.closest('.reply_content');
+    if (!replyContent) return null;
+    const cell = replyContent.closest('.cell');
+    if (!cell) return null;
+    const avatarImg = cell.querySelector('img.avatar');
+    const nameLink = cell.querySelector('a[href*="/member/"]');
+    const agoEl = cell.querySelector('span.ago[title]');
+    const noEl = cell.querySelector('span.no');
+    const info = {
+      avatarUrl: avatarImg ? avatarImg.src : '',
+      username: nameLink ? (nameLink.textContent || '').trim() : '',
+      timeText: agoEl ? formatTime(agoEl.getAttribute('title'), agoEl.textContent) : '',
+      floor: noEl ? (noEl.textContent || '').trim() : ''
+    };
+    console.debug('HighlightShare V2EX 回帖信息提取结果', info);
+    return info;
   }
 
   window.HighlightShareTemplates.register({
@@ -378,7 +677,6 @@
       const logo = document.createElement('img');
       logo.className = 'hs-tpl-v2ex-logo';
       logo.src = iconLink ? iconLink.href : '/static/icon-192.png';
-      logo.crossOrigin = 'anonymous';
       logo.alt = 'V2EX';
       crumbs.appendChild(logo);
 
@@ -410,26 +708,17 @@
         const avatar = document.createElement('img');
         avatar.className = 'hs-tpl-v2ex-avatar';
         avatar.src = topic.avatarUrl;
-        avatar.crossOrigin = 'anonymous';
+        // 不设 crossorigin：V2EX 图床按请求方 Origin 回显放行，
+        // 普通加载（与页面自身头像一致）预览必显示；导出时 html2canvas
+        // 的 useCORS 请求图床仍放行，可正常绘制
         avatar.alt = topic.author || 'avatar';
         titleRow.appendChild(avatar);
       }
       root.appendChild(titleRow);
 
-      // 作者行：投票按钮 + 作者/时间/点击数
+      // 作者行：作者/时间/点击数（原站投票按钮不再渲染）
       const meta = document.createElement('div');
       meta.className = 'hs-tpl-v2ex-meta';
-      if (topic.votes) {
-        const votes = document.createElement('div');
-        votes.className = 'hs-tpl-v2ex-votes';
-        ['up', 'down'].forEach((dir) => {
-          const btn = document.createElement('span');
-          btn.className = 'hs-tpl-v2ex-vote';
-          btn.appendChild(createVoteIcon(dir));
-          votes.appendChild(btn);
-        });
-        meta.appendChild(votes);
-      }
       const bylineParts = [];
       if (topic.author) {
         bylineParts.push(`<span class="hs-tpl-v2ex-author">${escapeHtml(topic.author)}</span>`);
@@ -453,14 +742,53 @@
       divider.className = 'hs-tpl-v2ex-divider';
       root.appendChild(divider);
 
-      // 正文：选区富文本优先（保留原换行/列表/链接），整帖正文兜底
-      if (data.richFragment) {
+      // 回帖场景：正文上方加回帖作者信息行（头像/用户名/楼层/时间）
+      const replyInfo = extractReplyInfo(data.anchor);
+      if (replyInfo) {
+        const rAuthor = document.createElement('div');
+        rAuthor.className = 'hs-tpl-v2ex-reply-author';
+        if (replyInfo.avatarUrl) {
+          const rAvatar = document.createElement('img');
+          rAvatar.className = 'hs-tpl-v2ex-reply-avatar';
+          rAvatar.src = replyInfo.avatarUrl;
+          // 同主帖头像：不设 crossorigin，普通加载保证预览显示
+          rAvatar.alt = replyInfo.username || 'avatar';
+          rAuthor.appendChild(rAvatar);
+        }
+        const rName = document.createElement('span');
+        rName.className = 'hs-tpl-v2ex-reply-name';
+        rName.textContent = replyInfo.username;
+        rAuthor.appendChild(rName);
+        const rMeta = document.createElement('span');
+        rMeta.className = 'hs-tpl-v2ex-reply-meta';
+        const rParts = [];
+        if (replyInfo.floor) {
+          rParts.push('#' + (replyInfo.floor.startsWith('#') ? replyInfo.floor.slice(1) : replyInfo.floor));
+        }
+        if (replyInfo.timeText) rParts.push(replyInfo.timeText);
+        rMeta.textContent = rParts.join(' · ');
+        rAuthor.appendChild(rMeta);
+        root.appendChild(rAuthor);
+      }
+
+      // 正文：有选区且落在正文容器内时，用"选中突出 + 上下文淡化"渲染；
+      // 否则退回选区富文本 / 整帖正文
+      const dimRange = getDimRange(data);
+      const box = findTopicBox(data.anchor);
+      const bodyContainer = findBodyContainer(data.anchor, box);
+      const canDim = dimRange && bodyContainer && containerContainsRange(bodyContainer, dimRange);
+      if (canDim) {
+        const body = document.createElement('div');
+        body.className = 'hs-tpl-v2ex-text';
+        body.appendChild(renderDimBody(bodyContainer, dimRange));
+        root.appendChild(body);
+      } else if (data.richFragment) {
         const body = document.createElement('div');
         body.className = 'hs-tpl-v2ex-text';
         body.appendChild(data.richFragment.cloneNode(true));
         root.appendChild(body);
       } else {
-        const content = cloneTopicContent(findTopicBox(data.anchor));
+        const content = cloneTopicContent(box);
         if (content) {
           const body = document.createElement('div');
           body.className = 'hs-tpl-v2ex-text';
