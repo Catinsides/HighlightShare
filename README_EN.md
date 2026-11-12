@@ -83,7 +83,7 @@ HighlightShare/
 
 Customized card rendering templates for specific websites. When you generate a card on a matching website, a **"模板"** (Template) button appears in the toolbar, letting you switch to the site's dedicated card style (and back to the default rendering anytime).
 
-Built-in: X / Twitter (`templates/x/`) — select any part of a tweet to generate a full tweet card. It automatically extracts the author name, avatar, publish time, media images and engagement stats (replies / shares / likes); blocks whose data cannot be found are omitted.
+Built-in templates live in the `templates/` directory — one subdirectory per site (e.g. `templates/x/`, `templates/v2ex/`). Check that directory to see which sites are supported.
 
 ### Writing a New Template
 
